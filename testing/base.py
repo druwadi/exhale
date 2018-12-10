@@ -29,7 +29,7 @@ from . import TEST_PROJECTS_ROOT, get_exhale_root
 from .decorators import default_confoverrides
 
 
-def make_default_config(project):
+def make_default_config(project, execute_doxygen, default_doxygen_stdin):
     """
     Return a default configuration for exhale.
 
@@ -38,13 +38,16 @@ def make_default_config(project):
             The name of the project that will be searched for in
             ``testing/projects/{project}``.
 
+    Band-aid: execute_doxygen, default_doxygen_stdin.  Ignore them unless you are me.
+    See ``vvv this stuff here vvv`` in this file.
+
     **Return**
         ``dict``
             The global default testing configuration to supply to ``confoverrides``
             with ``@pytest.mark.sphinx``, these are values that would ordinarily be
             written in a ``conf.py``.
     """
-    return {
+    ret = {
         "breathe_projects": {
             project: "./_doxygen/xml"
         },
@@ -55,11 +58,16 @@ def make_default_config(project):
             "rootFileName": "{0}_root.rst".format(project),
             "rootFileTitle": "``{0}`` Test Project".format(project),
             "doxygenStripFromPath": "..",
-            # additional arguments
-            "exhaleExecutesDoxygen": True,
-            "exhaleDoxygenStdin": "INPUT = ../include"
         }
     }
+
+    # Only add the doxygen configurations if requested (most test cases do).
+    if execute_doxygen:
+        ret["exhale_args"]["exhaleExecutesDoxygen"] = True
+        if default_doxygen_stdin:
+            ret["exhale_args"]["exhaleDoxygenStdin"] = "INPUT = ../include"
+
+    return ret
 
 
 class ExhaleTestCaseMetaclass(type):
@@ -179,7 +187,7 @@ class ExhaleTestCaseMetaclass(type):
                         test_project=test_project
                     ))
                     # Absurd test cases may need an increased recursion limit for Sphinx
-                    if self.test_project in ["cpp_long_names"]:
+                    if self.test_project in {"cpp_long_names"}:
                         conf_py.write(textwrap.dedent('''
                             import sys
                             sys.setrecursionlimit(2000)
@@ -191,6 +199,7 @@ class ExhaleTestCaseMetaclass(type):
                     index_rst.write(textwrap.dedent('''
                         Exhale Test Case
                         ================
+
                         .. toctree::
                            :maxdepth: 2
 
@@ -215,22 +224,30 @@ class ExhaleTestCaseMetaclass(type):
             attrs["_rootdir"] = pytest.fixture(autouse=True)(_rootdir)
             attrs["_set_app"] = pytest.fixture(autouse=True)(_set_app)
 
-            # Create a default test that will validate some common tests
-            def test_common(self):
-                marks  = getattr(self, "pytestmark", False)
-                no_run = marks and any('no_run' in m.args for m in marks)
-                if not no_run:
-                    self.checkRequiredConfigs()
-                    self.checkAllFilesGenerated()
-                    self.checkAllFilesIncluded()
+            if not attrs.get("no_test_common", False):
+                # Create a default test that will validate some common tests
+                def test_common(self):
+                    marks  = getattr(self, "pytestmark", False)
+                    no_run = marks and any('no_run' in m.args for m in marks)
+                    if not no_run:
+                        self.checkRequiredConfigs()
+                        self.checkAllFilesGenerated()
+                        self.checkAllFilesIncluded()
 
-            attrs["test_common"] = test_common
+                attrs["test_common"] = test_common
 
         # applying the default configuration override, which is overridden using the
         # @confoverride decorator at class or method level
         return default_confoverrides(
             super(ExhaleTestCaseMetaclass, mcs).__new__(mcs, name, bases, attrs),
-            make_default_config(attrs["test_project"])
+            make_default_config(
+                attrs["test_project"],
+                # vvv this stuff here vvv
+                # for doxyfile tests since
+                # @confoverrides(exhale_args={"exhaleDoxygenStdin": None}) breaks
+                attrs.get("execute_doxygen", True),
+                attrs.get("use_default_doxygen_stdin", True)
+            )
         )
 
 

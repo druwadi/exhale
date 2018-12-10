@@ -259,3 +259,35 @@ class ListingExcludeTests(ExhaleTestCase):
     def test_invalid_pattern(self):
         """Verify that non-string argument for pattern is rejected."""
         pass
+
+
+class DoxyfileTests(ExhaleTestCase):
+    """Test that users can specify the path to a ``Doxyfile``."""
+
+    test_project = "cpp_nesting"
+    """
+    .. testproject:: cpp_nesting
+
+    .. note::
+
+        The ``cpp_nesting`` project is just being recycled, the tests for that project
+        take place in
+        :class:`CPPNesting <testing.tests.cpp_nesting.CPPNesting>`.
+    """
+
+    no_test_common = True
+    """Do not generate ``test_common``."""
+
+    use_default_doxygen_stdin = False
+    """
+    Temporary band-aid needed for ``make_default_config`` and metaclass before 1.x.
+    """
+
+    @pytest.mark.setup_raises(
+        exception=ConfigError,
+        match=r"The file \[.*Doxyfile\] does not exist"
+    )
+    @confoverrides(exhale_args={"exhaleUseDoxyfile": True})
+    def test_doxyfile_bool_nonexistent(self):
+        """Verify missing ``{confdir}/Doxyfile`` triggers failure."""
+        pass
