@@ -12,6 +12,7 @@ All project based test cases should inherit from :class:`testing.base.ExhaleTest
 """
 
 from __future__ import unicode_literals
+import codecs
 import os
 import platform
 import re
@@ -25,7 +26,7 @@ import six
 from six import add_metaclass
 from sphinx.testing.path import path
 
-from . import TEST_PROJECTS_ROOT, get_exhale_root
+from . import docs_dir, get_exhale_root
 from .decorators import default_confoverrides
 
 
@@ -158,14 +159,11 @@ class ExhaleTestCaseMetaclass(type):
                 # Create the test project's 'docs' dir with a conf.py and index.rst.
 
                 # the root directory name is generated from the test name
-                testroot = os.path.join(
-                    TEST_PROJECTS_ROOT,
-                    self.test_project,
-                    "docs_{0}_{1}".format(self.__class__.__name__, self._testMethodName)
+                testroot = docs_dir(
+                    self.test_project, self.__class__.__name__, self._testMethodName
                 )
-                if os.path.isdir(testroot):
-                    shutil.rmtree(testroot)
-                os.makedirs(testroot)
+                if not os.path.isdir(testroot):
+                    os.makedirs(testroot)
 
                 # Make the testing root available for this test case for when separate
                 # source / build directories are used (in this case, self.app.srcdir
@@ -223,6 +221,62 @@ class ExhaleTestCaseMetaclass(type):
             # Create the class-level fixture for creating / deleting the docs/ dir
             attrs["_rootdir"] = pytest.fixture(autouse=True)(_rootdir)
             attrs["_set_app"] = pytest.fixture(autouse=True)(_set_app)
+
+            # Create fixture for generating files files requested with @with_file
+            # decorator.  First populate a list of (file_path, file_contents) tuples
+            # (reminder: this decorator is only allowed for functions).  If this list
+            # is non-empty, generate a class-level auto-used fixture that creates them.
+            with_file_requests = []
+            for n, attr in attrs.items():
+                # @with_file only intended to be used on functions.
+                if callable(attr) and n.startswith("test_"):
+                    marks = getattr(attr, "pytestmark", [])
+                    for mark in marks:
+                        if mark.name == "exhale_with_file":
+                            with_file_path = mark.kwargs.get("path", None)
+                            with_file_contents = mark.kwargs.get("contents", None)
+                            if not isinstance(with_file_path, six.string_types) or \
+                                    not isinstance(with_file_contents, six.string_types):
+                                raise RuntimeError("@with_file: `path` and `contents` must be strings!")
+                            with_file_requests.append((with_file_path, with_file_contents))
+
+            if with_file_requests:
+                def _actual_with_files(self):
+                    for file_path, file_contents in with_file_requests:
+                        # Create the desired file for this test case.
+                        try:
+                            parent_directory = os.path.dirname(file_path)
+                            if not os.path.isdir(parent_directory):
+                                os.makedirs(parent_directory)
+
+                            with codecs.open(file_path, "w", "utf-8") as f:
+                                f.write(file_contents)
+
+                            # import ipdb; ipdb.set_trace()
+                        except Exception as e:
+                            raise RuntimeError(
+                                "with_file: unable to create {file_path}:\n{e}".format(
+                                    file_path=file_path, e=e
+                                )
+                            )
+
+                    # Let the tests run
+                    yield
+
+                    # Now that the test is finished, remove the created file.
+                    for file_path, _ in with_file_requests:
+                        if os.path.isfile(file_path):
+                            try:
+                                os.remove(file_path)
+                            except Exception as e:
+                                raise RuntimeError(
+                                    "with_file: unable to remove {file_path}: {e}".format(
+                                        file_path=file_path, e=e
+                                    )
+                                )
+
+                # NOTE: *must* be scope="class" (or 'higher' scope).
+                attrs["_with_files"] = pytest.fixture(autouse=True, scope="class")(_actual_with_files)
 
             if not attrs.get("no_test_common", False):
                 # Create a default test that will validate some common tests
